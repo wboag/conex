@@ -1,0 +1,4 @@
+nltk
+tensorflow
+keras
+h5py

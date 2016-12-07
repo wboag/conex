@@ -1,4 +1,5 @@
 # Ignore everything per data use and confidentiality agreements
-*
+*pyc
+*pyx
 # Except this file
 !.gitignore

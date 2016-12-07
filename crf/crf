@@ -1,0 +1,65 @@
+#!/usr/bin/env python
+
+######################################################################
+#  galen - galen                                                     #
+#                                                                    #
+#  Willie Boag                                      wboag@cs.uml.edu #
+#                                                                    #
+#  Purpose: Command Line Interface for working with galen.           #
+######################################################################
+
+
+__author__ = 'Willie Boag'
+__date__   = 'Dec. 23, 2015'
+
+
+
+import sys
+
+
+
+
+def main():
+
+    commands = ['train', 'predict', 'evaluate', 'error']
+
+    help_msg = \
+    '''
+        Usage: galen [OPTIONS] COMMAND [ARGS]...
+
+        Options:
+          --help  Show this message and exit.
+
+        Commands:
+            %s
+    ''' % '\n            '.join(commands)
+
+    # Is argument correct?
+    if len(sys.argv)<2 or sys.argv[1] not in commands or sys.argv[1] == '--help':
+        print >>sys.stderr, help_msg, '\n'
+        exit(1)
+
+    # select appropriate sub-command
+    subcmd = sys.argv[1]
+    del sys.argv[1]
+
+    # Call appropriate sub-command
+    if subcmd == 'train':
+        import train
+        train.main()
+    elif subcmd == 'predict':
+        import predict
+        predict.main()
+    elif subcmd == 'evaluate':
+        import evaluate
+        evaluate.main()
+    elif subcmd == 'error':
+        import error
+        error.main()
+
+
+
+if __name__ == '__main__':
+    main()
+
+
