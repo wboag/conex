@@ -19,7 +19,7 @@ from keras.utils.np_utils import to_categorical
 from keras.layers.wrappers import TimeDistributed
 from keras.preprocessing import sequence
 from keras.models import Model
-from keras.layers import Dense, Dropout, Embedding, LSTM, Input, merge
+from keras.layers import Dense, Dropout, Embedding, LSTM, Input, merge, SimpleRNN
 
 
 # only load compile this model once per run (useful when predicting many times)
@@ -136,7 +136,7 @@ def predict(keras_model_tuple, X_seq_ids):
     X = create_data_matrix_X(X_seq_ids, nb_samples, maxlen, num_tags)
 
     # Predict tags using LSTM
-    batch_size = 128
+    batch_size = 512
     p = lstm_model.predict(X, batch_size=batch_size)
 
     # Greedy decoding of predictions
@@ -248,8 +248,9 @@ def create_bidirectional_lstm(input_dim, nb_classes, maxlen, W=None):
     # Embedding layer
     embedding = Embedding(output_dim=embedding_size, input_dim=input_dim, input_length=maxlen, mask_zero=True, weights=weights)(sequence)
 
+    #'''
     # LSTM 1 input
-    hidden_units = 128
+    hidden_units = 256
     lstm_f1 = LSTM(output_dim=hidden_units,return_sequences=True)(embedding)
     lstm_r1 = LSTM(output_dim=hidden_units,return_sequences=True,go_backwards=True)(embedding)
     merged1 = merge([lstm_f1, lstm_r1], mode='concat', concat_axis=-1)
@@ -260,11 +261,15 @@ def create_bidirectional_lstm(input_dim, nb_classes, maxlen, W=None):
     merged2 = merge([lstm_f2, lstm_r2], mode='concat', concat_axis=-1)
 
     # Dropout
-    after_dp = TimeDistributed(Dropout(0.5))(merged2)
+    #after_dp = TimeDistributed(Dropout(0.5))(merged2)
+    after_dp = merged2
 
     # fully connected layer
-    fc1 = TimeDistributed(Dense(output_dim=128, activation='sigmoid'))(after_dp)
+    fc1 = TimeDistributed(Dense(output_dim=128, activation='tanh'))(after_dp)
     fc2 = TimeDistributed(Dense(output_dim=nb_classes, activation='softmax'))(fc1)
+    #'''
+    #lstm_f1 = LSTM(output_dim=256,return_sequences=True)(embedding)
+    #fc2 = TimeDistributed(Dense(output_dim=nb_classes, activation='softmax'))(lstm_f1)
 
     model = Model(input=sequence, output=fc2)
 
