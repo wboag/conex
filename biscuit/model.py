@@ -191,7 +191,7 @@ class GalenModel:
 
 
 
-def generic_train(p_or_n, tokenized_sents, iob_nested_labels, 
+def generic_train(p_or_n, tokenized_sents, tags,
                   val_sents=None, val_labels=None, dev_split=None):
     '''
     generic_train()
@@ -220,19 +220,19 @@ def generic_train(p_or_n, tokenized_sents, iob_nested_labels,
 
         perm = range(len(tokenized_sents))
         random.shuffle(perm)
-
         tokenized_sents = [ tokenized_sents[i] for i in perm ]
+        tags            = [            tags[i] for i in perm ]
 
         ind = int(dev_split*len(tokenized_sents))
 
         val_sents   = tokenized_sents[:ind ]
         train_sents = tokenized_sents[ ind:]
 
-        val_labels   = iob_nested_labels[:ind ]
-        train_labels = iob_nested_labels[ ind:]
+        val_labels   = tags[:ind ]
+        train_labels = tags[ ind:]
 
         tokenized_sents   = train_sents
-        iob_nested_labels = train_labels
+        tags              = train_labels
 
 
     print '\tvectorizing words', p_or_n
@@ -286,7 +286,7 @@ def generic_train(p_or_n, tokenized_sents, iob_nested_labels,
         X_seq_ids.append(id_seq)
 
     # vectorize IOB labels
-    Y_labels = [ [tag2id[y] for y in y_seq] for y_seq in iob_nested_labels ]
+    Y_labels = [ [tag2id[y] for y in y_seq] for y_seq in tags ]
 
     print '\ttraining classifiers', p_or_n
 
