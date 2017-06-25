@@ -62,6 +62,14 @@ def normalize_tokens(toks):
 #  manipulating list-of-lists
 #############################################################
 
+def matrix_max(list_of_lists):
+    return max(map(max,list_of_lists))
+
+
+def matrix_len(list_of_lists):
+    return max(map(len,list_of_lists))
+
+
 def flatten(list_of_lists):
     '''
     flatten()

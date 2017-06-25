@@ -139,7 +139,8 @@ def read_i2b2(txt, con):
     tokenized_sents = []
 
     sent_tokenize = lambda text: text.split('\n')
-    word_tokenize = lambda text: text.split(' ')
+    #word_tokenize = lambda text: text.split(' ')
+    word_tokenize = lambda text: text.split()
 
     # Read in the medical text
     with open(txt) as f:

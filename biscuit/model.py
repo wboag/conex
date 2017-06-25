@@ -1,26 +1,42 @@
-######################################################################
-#  CliNER - model.py                                                 #
-#                                                                    #
-#  Willie Boag                                                       #
-#                                                                    #
-#  Purpose: Define the model for clinical concept extraction.        #
-######################################################################
-
-__author__ = 'Willie Boag'
-__date__   = 'Aug. 15, 2016'
-
-
-from collections import defaultdict
-import os
 import sys
-import io
-import random
+import os
+from collections import defaultdict
 from time import localtime, strftime
+import random
+import io
 
 import keras_ml
-from documents import labels as tag2id, id2tag
-from tools import flatten
+from word2vec import W
+
+import numpy as np
+import nltk
+
+from tools import flatten, save_list_structure, reconstruct_list
 from tools import pickle_dump, load_pickled_obj
+from tools import prose_partition
+from tools import is_prose_sentence
+
+from documents import labels as tag2id
+
+
+
+# reverse this dict
+id2tag = { v:k for k,v in tag2id.items() }
+
+
+
+
+def print_features(f, label, feature_names):
+    COLUMNS = 4
+    feature_names = sorted(feature_names)
+    print >>f, '\t    %s' % label
+    start = 0
+    for row in range(len(feature_names)/COLUMNS + 1):
+        print >>f,'\t\t',
+        for featname in feature_names[start:start+COLUMNS]:
+            print >>f, '%-15s' % featname,
+        print >>f, ''
+        start += COLUMNS
 
 
 
@@ -83,6 +99,10 @@ class GalenModel:
                 f.write(u'Training Files\n')
                 print_files(f, self._training_files)
                 f.write(u'\n')
+            else:
+                f.write(u'\n')
+                f.write(u'Training Files: %d\n' % self._n_training_files)
+                f.write(u'\n')
             f.write(u'-'*40)
             f.write(u'\n\n')
 
@@ -91,17 +111,27 @@ class GalenModel:
         return contents
 
 
-    def __init__(self):
-        """
-        GalenModel::__init__()
+    def serialize(self, filename, logfile=None):
+        # Serialize the model
+        pickle_dump(self, filename)
 
-        Instantiate a GalenModel object.
-        """
-        self._is_trained     = None
-        self._clf            = None
-        self._vocab          = None
+        # Describe training info?
+        if logfile:
+            #with open(logfile, 'a') as f:
+            f = sys.stdout
+            if logfile:
+                self.log(logfile=logfile, model_file=filename)
+
+
+    def __init__(self):
+        # Classifiers
+        self._is_trained = None
+        self._clf        = None
+        self._word_vocab = None
+        self._char_vocab = None
         self._training_files = None
-        self._log            = None
+        self._n_training_files = None
+        self._score      = {}
 
 
     def fit_from_documents(self, documents):
@@ -117,10 +147,13 @@ class GalenModel:
         tokenized_sents  = flatten([d.getTokenizedSentences() for d in documents])
         labels           = flatten([d.getTokenLabels()        for d in documents])
 
+        # Save training file info
+        self._n_training_files = len(documents)
+        if self._n_training_files < 100:
+            self._training_files = [ d.getName() for d in documents ]
+
         # Call the internal method
         self.fit(tokenized_sents, labels, dev_split=0.10)
-
-        self._training_files = [ d.getName() for d in documents ]
 
 
     def fit(self, tok_sents, tags, val_sents=None, val_tags=None, dev_split=None):
@@ -141,11 +174,12 @@ class GalenModel:
         self._time_train_begin = strftime("%Y-%m-%d %H:%M:%S", localtime())
 
         # train classifier
-        voc, clf, dev_score = generic_train('all', tok_sents, tags,
-                                            val_sents=val_sents, val_labels=val_tags,
-                                            dev_split=dev_split)
+        V_w, V_c, clf, dev_score = generic_train('all', tok_sents, tags,
+                                                 val_sents=val_sents,val_labels=val_tags,
+                                                 dev_split=dev_split)
         self._is_trained = True
-        self._vocab = voc
+        self._word_vocab = V_w
+        self._char_vocab = V_c
         self._clf   = clf
         self._score = dev_score
 
@@ -207,6 +241,9 @@ def generic_train(p_or_n, tokenized_sents, tags,
     @param val_labels.         Validation data. Same format as iob_nested_labels
     @param dev_split.          A real number from 0 to 1
     '''
+
+    global W
+
     # Must have data to train on
     if len(tokenized_sents) == 0:
         raise Exception('Training must have %s training examples' % p_or_n)
@@ -231,127 +268,137 @@ def generic_train(p_or_n, tokenized_sents, tags,
         val_labels   = tags[:ind ]
         train_labels = tags[ ind:]
 
-        tokenized_sents   = train_sents
-        tags              = train_labels
-
+        #tokenized_sents   = train_sents
+        #tags              = train_labels
 
     print '\tvectorizing words', p_or_n
 
-    #tokenized_sents   = train_sents[ :2]
-    #iob_nested_labels = train_labels[:2]
+    # build vocabulary of words & chars
+    word_vocab = build_vocab(    train_sents    )
+    char_vocab = build_vocab(sum(train_sents,[]))
 
-    # count word frequencies to determine OOV
-    freq = defaultdict(int)
-    for sent in tokenized_sents:
-        for w in sent:
-            freq[w] += 1
+    if W:
+        #W = { k:v[:4] for k,v in W.items() }
+        dim = len(W.values()[0])
+        W_init = np.random.rand(len(word_vocab),dim)
+        for w,ind in word_vocab.items():
+            if w in W:
+                W_init[ind,:] = W[w]
 
-    # determine OOV based on % of vocab or minimum word freq threshold
-    if len(freq) < 100:
-        lo = len(freq)/20
-        oov = set([ w for w,f in sorted(freq.items(), key=lambda t:t[1]) ][:lo])
+        # how many words got initialized?
+        w_vec = set(W.keys())
+        w_voc = set(word_vocab.keys())
+        both = len(w_voc&w_vec)
+        tot  = len(w_voc)
+        print '\t\tinit: %.3f (%d/%d)' % (float(both)/tot,both,tot)
     else:
-        lo = 2
-        oov = set([ w for w,f in freq.items() if (f <= lo) ])
+        W_init = None
+        print '\t\trandom initial embeddings'
 
-    '''
-    for w in oov:
-        print w
-    print 
-    print len(oov)
-    print len(freq)
-    '''
-    '''
-    val = None
-    for w,f in sorted(freq.items(), key=lambda t:t[1]):
-        if val != f:
-            val = f
-            print
-        print '%8d  %s' % (f,w)
-    exit()
-    '''
+    # L - number of lines
+    # S - sentence length
+    # W - word length
 
-    # build vocabulary of words
-    vocab = {}
-    for sent in tokenized_sents:
-        for w in sent:
-            if (w not in vocab) and (w not in oov):
-                vocab[w] = len(vocab) + 1
-    vocab['oov'] = len(vocab) + 1
+    # build matrix of words (LxS)
+    train_X_word_ids = []
+    for sent in train_sents:
+        id_seq = [ (word_vocab[w] if w in word_vocab else word_vocab['oov'])
+                   for w in sent                                             ]
+        train_X_word_ids.append(id_seq)
 
-    # vectorize tokenized sentences
-    X_seq_ids = []
-    for sent in tokenized_sents:
-        id_seq = [ (vocab[w] if w in vocab else vocab['oov']) for w in sent ]
-        X_seq_ids.append(id_seq)
+    val_X_word_ids = []
+    for sent in val_sents:
+        id_seq = [ (word_vocab[w] if w in word_vocab else word_vocab['oov'])
+                   for w in sent                                             ]
+        val_X_word_ids.append(id_seq)
+
+    # build tensor of characters (LxSxW)
+    train_X_char_ids = []
+    for sent in train_sents:
+        seq_char_ids = []
+        for word in sent:
+            id_seq = [ (char_vocab[c] if c in char_vocab else char_vocab['oov'])
+                       for c in word                                            ]
+            assert id_seq != []
+            seq_char_ids.append(id_seq)
+        train_X_char_ids.append(seq_char_ids)
+
+    val_X_char_ids = []
+    for sent in val_sents:
+        seq_char_ids = []
+        for word in sent:
+            id_seq = [ (char_vocab[c] if c in char_vocab else char_vocab['oov'])
+                       for c in word                                            ]
+            assert id_seq != []
+            seq_char_ids.append(id_seq)
+        val_X_char_ids.append(seq_char_ids)
 
     # vectorize IOB labels
-    Y_labels = [ [tag2id[y] for y in y_seq] for y_seq in tags ]
+    train_Y_labels = [ [tag2id[y] for y in y_seq] for y_seq in train_labels ]
+    val_Y_labels   = [ [tag2id[y] for y in y_seq] for y_seq in   val_labels ]
 
     print '\ttraining classifiers', p_or_n
 
-    #val_sents  = val_sents[ :5]
-    #val_labels = val_labels[:5]
+    # Train classifier
+    clf, dev_score  = keras_ml.train(train_X_word_ids = train_X_word_ids, 
+                                     train_X_char_ids = train_X_char_ids, 
+                                     train_Y_ids      = train_Y_labels, 
+                                       val_X_word_ids = val_X_word_ids, 
+                                       val_X_char_ids = val_X_char_ids,
+                                       val_Y_ids      = val_Y_labels,
+                                     tag2id           = tag2id, 
+                                     W                = W_init)
 
-    # if there is specified validation data, then vectorize it
-    if val_sents:
-        # vectorize validation X
-        val_X = []
-        for sent in val_sents:
-            id_seq = [ (vocab[w] if w in vocab else vocab['oov']) for w in sent ]
-            val_X.append(id_seq)
-        # vectorize validation Y
-        val_Y = [ [tag2id[y] for y in y_seq] for y_seq in val_labels ]
-        # rename 
-        val_sents  = val_X
-        val_labels = val_Y
-
-    # train using lstm
-    clf, dev_score  = keras_ml.train(X_seq_ids, Y_labels, tag2id, 
-                                     val_X_ids=val_sents, val_Y_ids=val_labels)
-
-    return vocab, clf, dev_score
+    return word_vocab, char_vocab, clf, dev_score
 
 
 
-def generic_predict(p_or_n, tokenized_sents, vocab, clf):
-    '''
-    generic_predict()
-
-    Train a model that works for both prose and nonprose
-
-    @param p_or_n.          A string that indicates "prose", "nonprose", or "all"
-    @param tokenized_sents. A list of sentences, where each sentence is tokenized
-                              into words
-    @param vocab.           A dictionary mapping word tokens to numeric indices.
-    @param clf.             An encoding of the trained keras model.
-    '''
+def generic_predict(p_or_n, tokenized_sents, word_vocab, char_vocab, clf):
 
     # If nothing to predict, skip actual prediction
     if len(tokenized_sents) == 0:
         print '\tnothing to predict ' + p_or_n
         return []
 
+
     print '\tvectorizing words ' + p_or_n
 
-    # vectorize tokenized sentences
-    X_seq_ids = []
+    # build matrix of words (LxS)
+    X_word_ids = []
     for sent in tokenized_sents:
-        id_seq = []
-        for w in sent:
-            if w in vocab:
-                id_seq.append(vocab[w])
-            else:
-                id_seq.append(vocab['oov'])
-        X_seq_ids.append(id_seq)
+        id_seq = [ (word_vocab[w] if w in word_vocab else word_vocab['oov'])
+                   for w in sent                                             ]
+        X_word_ids.append(id_seq)
+
+    # build tensor of characters (LxSxW)
+    X_char_ids = []
+    for sent in tokenized_sents:
+        seq_char_ids = []
+        for word in sent:
+            id_seq = [ (char_vocab[c] if c in char_vocab else char_vocab['oov'])
+                       for c in word                                            ]
+            assert id_seq != []
+            seq_char_ids.append(id_seq)
+        X_char_ids.append(seq_char_ids)
 
     print '\tpredicting  labels ' + p_or_n
 
     # Predict labels
-    predictions = keras_ml.predict(clf, X_seq_ids)
+    predictions = keras_ml.predict(clf, X_word_ids, X_char_ids)
 
     # Format labels from output
     return predictions
+
+
+
+def build_vocab(list_of_seqs):
+    vocab = {}
+    for seq in list_of_seqs:
+        for unit in seq:
+            if unit not in vocab:
+                vocab[unit] = len(vocab) + 1
+    vocab['oov'] = len(vocab)
+    return vocab
 
 
 
@@ -396,4 +443,3 @@ def print_vec(f, label, vec):
             f.write(unicode('%7.3f' % featname))
         f.write(u'\n')
         start += COLUMNS
-

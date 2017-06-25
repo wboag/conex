@@ -43,6 +43,12 @@ def main():
         help = "Path to the log file for training info",
         default = os.path.join(CLINER_DIR, 'models', 'train.log')
     )
+    '''
+    parser.add_argument("--opt",
+        dest = "opt",
+        help = "What sequence to optimize",
+    )
+    '''
     parser.add_argument("--format",
         dest = "format",
         help = "Data format ( i2b2 )"
@@ -103,11 +109,15 @@ def main():
         if k in con_files_map:
             training_list.append((txt_files_map[k], con_files_map[k]))
 
+    #opt = args.opt.split('_')
+
     # Train the model
+    #train(training_list, args.model, args.format, logfile=args.log, opt=opt)
     train(training_list, args.model, args.format, logfile=args.log)
 
 
 
+#def train(training_list, model_path, format, logfile=None, opt=["concept"]):
 def train(training_list, model_path, format, logfile=None):
     # Read the data into a Document object
     docs = []
@@ -127,13 +137,12 @@ def train(training_list, model_path, format, logfile=None):
     model = GalenModel()
 
     # Train the model using the Document's data
+    #model.fit_from_documents(docs, opt)
     model.fit_from_documents(docs)
 
     # Pickle dump
     print '\nserializing model to %s\n' % model_path
-    with open(model_path, 'wb') as f:
-        pickle.dump(model, f)
-    model.log(logfile, model_file=model_path)
+    model.serialize(model_path, logfile=logfile)
 
 
 if __name__ == '__main__':
