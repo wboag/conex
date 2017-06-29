@@ -87,6 +87,8 @@ class GalenModel:
             for label,vec in self._score['history'  ].items():
                 print_vec(f, '%-16s'%label, vec)
             f.write(u'\n')
+            f.write(unicode(self._score['model']))
+            f.write(u'\n')
             f.write(unicode(self._score['train']['iob_conf']))
             print_vec(f, 'train iob precision', self._score['train']['iob_precision'])
             print_vec(f, 'train iob recall   ', self._score['train']['iob_recall'   ])

@@ -26,7 +26,8 @@ hierarchical_lstm = None
 
 
 def train(train_X_word_ids   , train_X_char_ids   , train_Y_ids   , tag2id,
-            val_X_word_ids=[],   val_X_char_ids=[],   val_Y_ids=[], W=None, epochs=100):
+            val_X_word_ids=[],   val_X_char_ids=[],   val_Y_ids=[], W=None, 
+            epochs=10        , hyperparams={}):
 
     word_input_dim =         matrix_max(train_X_word_ids)  + 1
     char_input_dim = max(map(matrix_max,train_X_char_ids)) + 1
@@ -40,7 +41,14 @@ def train(train_X_word_ids   , train_X_char_ids   , train_Y_ids   , tag2id,
 
     hierarchical_lstm = create_model(word_input_dim, char_input_dim,
                                      word_maxlen   , char_maxlen   ,
-                                     num_tags      , W             )
+                                     num_tags      , W             ,
+                                     hyperparams=hyperparams       )
+
+    # get word embedding size
+    for layer in hierarchical_lstm.get_config()['layers']:
+        if layer['class_name'] == 'Embedding':
+            word_emb_dim = layer['config']['output_dim']
+    W_shape = (word_input_dim, word_emb_dim)
 
     # turn each id in Y_ids into a onehot vector
     train_Y_seq_onehots = [to_categorical(y, num_classes=num_tags) for y in train_Y_ids]
@@ -106,20 +114,26 @@ def train(train_X_word_ids   , train_X_char_ids   , train_Y_ids   , tag2id,
 
     ######################################################################
 
-    # how many words in the vocabulary?
-    W_shape = W.shape
-
-    hyperparams = (word_input_dim, char_input_dim, num_tags,
-                   word_maxlen   , char_maxlen   , W_shape )
+    sizes = (word_input_dim, char_input_dim, num_tags,
+             word_maxlen   , char_maxlen   , W_shape )
 
     # information about fitting the model
     scores = {}
     scores['history'] = history.history
 
-    scores['train'] = compute_stats('train', hierarchical_lstm, hyperparams,
+    # summary model (includes all size hyperparameters)
+    sstream = StringIO.StringIO()
+    real_stdout = sys.stdout
+    sys.stdout = sstream
+    hierarchical_lstm.summary()
+    sys.stdout = real_stdout
+    scores['model'] = sstream.getvalue()
+
+
+    scores['train'] = compute_stats('train', hierarchical_lstm, sizes,
                                     train_X_word, train_X_char, train_Y_ids)
     if val_X_word_ids:
-        scores['dev'] = compute_stats('dev', hierarchical_lstm, hyperparams,
+        scores['dev'] = compute_stats('dev', hierarchical_lstm, sizes,
                                       val_X_word, val_X_char, val_Y_ids)
 
     ######################################################################
@@ -223,13 +237,13 @@ def predict(keras_model_tuple, X_word_ids, X_char_ids):
 def create_model(word_input_dim, char_input_dim,
                  word_maxlen   , char_maxlen   ,
                  num_tags                      , 
-                 W=None        , W_shape=None  ):
+                 W=None        , W_shape=None  ,
+                 hyperparams={}                ):
 
     # hyperparams
     char_emb_size  = 25
     c_seq_emb_size = 25
     wlstm1_size    = 100
-    wlstm2_size    = 100
 
     # dropout
     p = 0.5
@@ -337,7 +351,7 @@ def compute_stats(label, lstm_model, hyperparams, X_word, X_char, Y_ids):
     @param Y_ids.        A list of list of tags - the labels to X.
     '''
     # un-pack hyperparameters
-    word_input_dim,char_input_dim,num_tags,word_maxlen,char_maxlen,W_shape = hyperparams
+    word_input_dim,char_input_dim,num_tags,word_maxlen,char_maxlen,_ = hyperparams
 
     # predict label probabilities
     batch_size = 512
