@@ -4,19 +4,23 @@ import os
 import time
 import random
 import sys
+import StringIO
 
 import tensorflow as tf
 
 from keras.utils.np_utils import to_categorical
-from keras.layers.wrappers import TimeDistributed
 from keras.preprocessing import sequence
 from keras.models import Model
-from keras.layers import Dense, Dropout, Embedding, LSTM, Input, merge
-from keras.layers import Lambda, Masking
+from keras.layers import Input
 from keras.layers.merge import Concatenate
+from keras.layers import Dense, Embedding, LSTM, Dropout, Bidirectional
+from keras.layers.crf import ChainCRF
+from keras.layers.wrappers import TimeDistributed
+from keras.layers import Masking
 from keras.callbacks import EarlyStopping
 
 from tools import matrix_max
+from documents import id2tag, labels as tag2id
 
 hierarchical_lstm = None
 
@@ -49,14 +53,18 @@ def train(train_X_word_ids   , train_X_char_ids   , train_Y_ids   , tag2id,
                                        word_maxlen, char_maxlen)
     train_X_word = build_X_word_matrix(train_X_word_ids, nb_train_samples, word_maxlen)
 
-    train_Y = create_data_matrix_Y(train_Y_seq_onehots, nb_train_samples, 
+    #train_Y = create_data_matrix_Y(train_Y_seq_onehots, nb_train_samples, 
+    #                              word_maxlen, num_tags)
+    train_Y = create_id_matrix_Y(train_Y_seq_onehots, nb_train_samples, 
                                   word_maxlen, num_tags)
 
     val_X_char = build_X_char_matrix(val_X_char_ids, nb_val_samples, 
                                        word_maxlen, char_maxlen)
     val_X_word = build_X_word_matrix(val_X_word_ids, nb_val_samples, word_maxlen)
 
-    val_Y = create_data_matrix_Y(val_Y_seq_onehots, nb_val_samples, 
+    #val_Y = create_data_matrix_Y(val_Y_seq_onehots, nb_val_samples, 
+    #                              word_maxlen, num_tags)
+    val_Y = create_id_matrix_Y(val_Y_seq_onehots, nb_val_samples, 
                                   word_maxlen, num_tags)
 
     print 
@@ -73,7 +81,7 @@ def train(train_X_word_ids   , train_X_char_ids   , train_Y_ids   , tag2id,
     print 'training begin'
     print 
 
-    batch_size = 512
+    batch_size = 128
 
     early_stopping = EarlyStopping(monitor='val_loss', patience=10)
 
@@ -223,6 +231,9 @@ def create_model(word_input_dim, char_input_dim,
     wlstm1_size    = 100
     wlstm2_size    = 100
 
+    # dropout
+    p = 0.5
+
     # pretrained word embeddings
     if W is not None:
         word_emb_size  = W.shape[1]
@@ -239,19 +250,26 @@ def create_model(word_input_dim, char_input_dim,
 
     # character-level LSTM encoder
     char_input = Input(shape=(char_maxlen,), dtype='int32')
-    char_embedding = Embedding(output_dim=char_emb_size,
-                               input_dim=char_input_dim,
-                               input_length=char_maxlen,
-                               mask_zero=True)(char_input)
-    char_lstm_f    = LSTM(units=c_seq_emb_size                  )(char_embedding)
-    char_lstm_r    = LSTM(units=c_seq_emb_size,go_backwards=True)(char_embedding)
-    char_lstm_fr = Concatenate()([char_lstm_f,char_lstm_r])
-    char_encoder_fr = Model(inputs=char_input, outputs=char_lstm_fr)
+    char_emb = Embedding(output_dim=char_emb_size,
+                         input_dim=char_input_dim,
+                         input_length=char_maxlen,
+                         mask_zero=True)(char_input)
+    char_lstm_f  = LSTM(units=c_seq_emb_size                  ,
+                        dropout=p, recurrent_dropout=p)(char_emb)
+    char_lstm_r  = LSTM(units=c_seq_emb_size,go_backwards=True,
+                        dropout=p, recurrent_dropout=p)(char_emb)
+    char_lstm    = Concatenate()([char_lstm_f,char_lstm_r])
+
+    # TODO: verify that go_backwards does the right thing (using toy example)
+    #       MAY need to reverse the sequence in keras code
+    pass
+
+    char_encoder = Model(inputs=char_input, outputs=char_lstm)
 
     # apply char-level encoder to every char sequence (word)
     char_seqs = Input(shape=(word_maxlen,char_maxlen),dtype='int32',name='char')
-    encoded_char_fr_states = TimeDistributed(char_encoder_fr)(char_seqs)
-    m_encoded_char_fr_states = Masking(0.0)(encoded_char_fr_states)
+    encoded_char_states = TimeDistributed(char_encoder)(char_seqs)
+    m_encoded_char_states = Masking(0.0)(encoded_char_states)
 
     # apply embeddings layer to every word
     word_seqs = Input(shape=(word_maxlen,), dtype='int32', name='word')
@@ -262,34 +280,43 @@ def create_model(word_input_dim, char_input_dim,
                                mask_zero=True)(word_seqs)
 
     # combine char-level encoded states WITH word embeddings
-    word_feats = Concatenate(axis=-1)([m_encoded_char_fr_states, word_embedding])
+    word_feats = Concatenate(axis=-1)([m_encoded_char_states, word_embedding])
     #word_feats = encoded_char_fr_states
     #word_feats = word_embedding
 
-    # Dropout
-    word_feats_d = TimeDistributed(Dropout(0.5))(word_feats)
-
     # word-level LSTM
-    word_lstm_f1 = LSTM(units=wlstm1_size, return_sequences=True
-                                        )(word_feats_d)
+    '''
+    word_lstm_f1 = LSTM(units=wlstm1_size, return_sequences=True,
+                        dropout=p, recurrent_dropout=p, 
+                                         )(word_feats)
     word_lstm_r1 = LSTM(units=wlstm1_size, return_sequences=True,
-                       go_backwards=True)(word_feats_d)
-    word_lstm_fr1 = Concatenate(axis=-1)([word_lstm_f1, word_lstm_r1])
+                        dropout=p, recurrent_dropout=p, 
+                        go_backwards=True)(word_feats)
+    word_lstm = Concatenate(axis=-1)([word_lstm_f1, word_lstm_r1])
+    '''
+    word_lstm = Bidirectional( LSTM(units=wlstm1_size, return_sequences=True,
+                                   dropout=p, recurrent_dropout=p)           )(word_feats)
 
     # Predict labels using the sequence of word encodings
     orig_pred = TimeDistributed( Dense(units=num_tags_inner,
-                                       activation='softmax' )  )(word_lstm_fr1)
+                                       activation='softmax' )  )(word_lstm)
+    #orig_pred = TimeDistributed(Dense(units=num_tags_inner))(word_lstm)
 
     # TODO: crf layer
-    pass
+    crf = ChainCRF()
+    #crf_output = crf(word_embedding)
+    crf_output = crf(orig_pred)
+    #crf_output = orig_pred
 
+    #model = Model( inputs=[word_seqs],
     model = Model( inputs=[char_seqs,word_seqs],
-                   outputs=[orig_pred]  )
-
+                   outputs=[crf_output]        )
+                   
     print
     print 'compiling model'
     start = time.clock()
-    model.compile(loss='categorical_crossentropy', optimizer='adam')
+    #model.compile(loss='categorical_crossentropy', optimizer='adam')
+    model.compile(loss=crf.sparse_loss, optimizer='adam')
     end = time.clock()
     print 'finished compiling: ', (end-start)
     print
@@ -318,53 +345,108 @@ def compute_stats(label, lstm_model, hyperparams, X_word, X_char, Y_ids):
 
     # choose the highest-probability labels
     nb_samples = len(Y_ids)
-    predictions = []
+    iob_predictions = []
+    con_predictions = []
     for i in range(nb_samples):
         num_words = len(Y_ids[i])
-        tags = pred[i,word_maxlen-num_words:].argmax(axis=1)
-        predictions.append(tags.tolist())
+        iob_tags = pred[i,word_maxlen-num_words:].argmax(axis=1)
+        concept_tags = [ id2tag[p][2:] for p in iob_tags ]
+        con_predictions.append([ c if c else 'O' for c in concept_tags ])
+        iob_predictions.append(iob_tags.tolist())
+    concepts = list(set([ con[2:] if con!='O' else 'O' for con in tag2id ]))
 
     # confusion matrix
-    confusion = np.zeros( (num_tags,num_tags) )
-    for tags,yseq in zip(predictions,Y_ids):
+    iob_confusion = np.zeros( (num_tags,num_tags) )
+    for tags,yseq in zip(iob_predictions,Y_ids):
         for y,p in zip(yseq, tags):
-            confusion[p,y] += 1
+            iob_confusion[p,y] += 1
 
-    # print confusion matrix
-    print '\n'
-    print label
-    print ' '*6,
+    num_concepts = len(concepts)
+    concept_confusion = np.zeros( (num_concepts,num_concepts) )
+    con2id = { c:i for i,c in enumerate(concepts) }
+    concept_Y_empty = [ [id2tag[y][2:] for y in y_line] for y_line in Y_ids ]
+    concept_Y = [ [c if c else 'O' for c in C] for C in concept_Y_empty ]
+    for tags,yseq in zip(con_predictions,concept_Y):
+        for y,p in zip(yseq, tags):
+            p_ind = con2id[p]
+            y_ind = con2id[y]
+            concept_confusion[p_ind,y_ind] += 1
+
+    # IOB confusion matrix
+    out = StringIO.StringIO()
+    out.write('\n\n%s IOB\n\n' % label)
+    out.write(' '*7)
     for i in range(num_tags):
-        print '%4d' % i,
-    print ' (gold)'
+        out.write('%4d ' % i)
+    out.write(' (gold)\n')
     for i in range(num_tags):
-        print '%2d' % i, '   ',
+        out.write('%2d    ' % i)
         for j in range(num_tags):
-            print '%4d' % confusion[i][j],
-        print
-    print '(pred)'
-    print '\n'
+            out.write('%4d ' % iob_confusion[i][j])
+        out.write('\n')
+    out.write('(pred)\n\n\n')
+    iob_conf_str = out.getvalue()
+    out.close()
 
-    precision = np.zeros(num_tags)
-    recall    = np.zeros(num_tags)
-    f1        = np.zeros(num_tags)
+    iob_precision = np.zeros(num_tags)
+    iob_recall    = np.zeros(num_tags)
+    iob_f1        = np.zeros(num_tags)
 
     for i in range(num_tags):
-        correct    =     confusion[i,i]
-        num_pred   = sum(confusion[i,:])
-        num_actual = sum(confusion[:,i])
+        correct    =     iob_confusion[i,i]
+        num_pred   = sum(iob_confusion[i,:])
+        num_actual = sum(iob_confusion[:,i])
 
         p  = correct / (num_pred   + 1e-9)
         r  = correct / (num_actual + 1e-9)
 
-        precision[i] = p
-        recall[i]    = r
-        f1[i]        = (2*p*r) / (p + r + 1e-9)
+        iob_precision[i] = p
+        iob_recall[i]    = r
+        iob_f1[i]        = (2*p*r) / (p + r + 1e-9)
+
+    # concept confusion matrix
+    out = StringIO.StringIO()
+    out.write('\n\n%s concepts\n\n' % label)
+    out.write(' '*14)
+    for c in concepts:
+        out.write('%-10s ' % c)
+    out.write(' (gold)\n')
+    for i in range(num_concepts):
+        out.write('%10s    ' % concepts[i])
+        for j in range(num_concepts):
+            out.write('%-10d ' % concept_confusion[i][j])
+        out.write('\n')
+    out.write('(pred)\n\n\n')
+    con_conf_str = out.getvalue()
+    out.close()
+
+    con_precision = np.zeros(num_concepts)
+    con_recall    = np.zeros(num_concepts)
+    con_f1        = np.zeros(num_concepts)
+
+    for i in range(num_concepts):
+        correct    =     concept_confusion[i,i]
+        num_pred   = sum(concept_confusion[i,:])
+        num_actual = sum(concept_confusion[:,i])
+
+        p  = correct / (num_pred   + 1e-9)
+        r  = correct / (num_actual + 1e-9)
+
+        con_precision[i] = p
+        con_recall[i]    = r
+        con_f1[i]        = (2*p*r) / (p + r + 1e-9)
 
     scores = {}
-    scores['precision'] = precision
-    scores['recall'   ] = recall
-    scores['f1'       ] = f1
+
+    scores['con_conf'     ] = con_conf_str
+    scores['con_precision'] = con_precision
+    scores['con_recall'   ] = con_recall
+    scores['con_f1'       ] = con_f1
+
+    scores['iob_conf'     ] = iob_conf_str
+    scores['iob_precision'] = iob_precision
+    scores['iob_recall'   ] = iob_recall
+    scores['iob_f1'       ] = iob_f1
 
     return scores
 
@@ -428,6 +510,26 @@ def create_data_matrix_Y(Y_seq_onehots, nb_samples, maxlen, num_classes):
         # We pad on the left with zeros,
         #    so for short sentences the first elemnts in the matrix are zeros
         Y[i, maxlen-cur_len:,:] = Y_seq_onehots[i][:maxlen]
+
+    return Y
+
+
+
+def create_id_matrix_Y(Y_seq_onehots, nb_samples, maxlen, num_classes):
+    Y = np.zeros((nb_samples, maxlen,1))
+
+    for i in range(nb_samples):
+        cur_len = len(Y_seq_onehots[i])
+        # ignore tail of sentences longer than what was trained on
+        #    (only happens during prediction)
+        if maxlen-cur_len < 0:
+            cur_len = maxlen
+        # We pad on the left with zeros,
+        #    so for short sentences the first elemnts in the matrix are zeros
+        lst = [ [it] for it in Y_seq_onehots[i][:maxlen].argmax(axis=1) ]
+        vec = np.matrix(lst)
+        #Y[i, maxlen-cur_len:,:] = [Y_seq_onehots[i][:maxlen].argmax(axis=1)]
+        Y[i, maxlen-cur_len:,:] = vec
 
     return Y
 
