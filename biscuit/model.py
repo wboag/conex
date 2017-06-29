@@ -3,6 +3,7 @@ import os
 from collections import defaultdict
 from time import localtime, strftime
 import random
+import math
 import io
 
 import keras_ml
@@ -83,16 +84,29 @@ class GalenModel:
             f.write(unicode('training began: %s\n' % self._time_train_begin))
             f.write(unicode('training ended: %s\n' % self._time_train_end))
             f.write(u'\n')
-            f.write(u'scores\n')
-            print_vec(f, 'train precision', self._score['train']['precision'])
-            print_vec(f, 'train recall   ', self._score['train']['recall'   ])
-            print_vec(f, 'train f1       ', self._score['train']['f1'       ])
-            if 'dev' in self._score:
-                print_vec(f, u'dev precision   ', self._score['dev']['precision'])
-                print_vec(f, u'dev recall      ', self._score['dev']['recall'   ])
-                print_vec(f, u'dev f1          ', self._score['dev']['f1'       ])
             for label,vec in self._score['history'  ].items():
                 print_vec(f, '%-16s'%label, vec)
+            f.write(u'\n')
+            f.write(unicode(self._score['train']['iob_conf']))
+            print_vec(f, 'train iob precision', self._score['train']['iob_precision'])
+            print_vec(f, 'train iob recall   ', self._score['train']['iob_recall'   ])
+            print_vec(f, 'train iob f1       ', self._score['train']['iob_f1'       ])
+            f.write(u'\n')
+            f.write(unicode(self._score['train']['con_conf']))
+            print_vec(f, 'train con precision', self._score['train']['con_precision'])
+            print_vec(f, 'train con recall   ', self._score['train']['con_recall'   ])
+            print_vec(f, 'train con f1       ', self._score['train']['con_f1'       ])
+            if 'dev' in self._score:
+                f.write(u'\n')
+                f.write(unicode(self._score['dev'  ]['iob_conf']))
+                print_vec(f, u'dev iob precision   ',self._score['dev']['iob_precision'])
+                print_vec(f, u'dev iob recall      ',self._score['dev']['iob_recall'   ])
+                print_vec(f, u'dev iob f1          ',self._score['dev']['iob_f1'       ])
+                f.write(u'\n')
+                f.write(unicode(self._score['dev'  ]['con_conf']))
+                print_vec(f, u'dev con precision   ',self._score['dev']['con_precision'])
+                print_vec(f, u'dev con recall      ',self._score['dev']['con_recall'   ])
+                print_vec(f, u'dev con f1          ',self._score['dev']['con_f1'       ])
             f.write(u'\n')
             if self._training_files:
                 f.write(u'\n')
@@ -438,7 +452,7 @@ def print_vec(f, label, vec):
     f.write(unicode('\t%-10s: ' % label))
     if type(vec) != type([]):
         vec = vec.tolist()
-    for row in range(len(vec)/COLUMNS):
+    for row in range(int(math.ceil(float(len(vec))/COLUMNS))):
         for featname in vec[start:start+COLUMNS]:
             f.write(unicode('%7.3f' % featname))
         f.write(u'\n')
