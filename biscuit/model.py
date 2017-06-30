@@ -7,7 +7,7 @@ import math
 import io
 
 import keras_ml
-from word2vec import W
+from embeddings import load_embeddings
 
 import numpy as np
 import nltk
@@ -87,6 +87,9 @@ class GalenModel:
             for label,vec in self._score['history'  ].items():
                 print_vec(f, '%-16s'%label, vec)
             f.write(u'\n')
+            for hyperparam,val in self._score['hyperparams'].items():
+                f.write(unicode('\t%-15s: %s\n' % (hyperparam,val)))
+            f.write(u'\n')
             f.write(unicode(self._score['model']))
             f.write(u'\n')
             f.write(unicode(self._score['train']['iob_conf']))
@@ -150,14 +153,15 @@ class GalenModel:
         self._score      = {}
 
 
-    def fit_from_documents(self, documents):
+    def fit_from_documents(self, documents, hyperparams={}):
         """
         GalenModel::fit_from_documents()
 
         Train clinical concept extraction model using annotated data (files).
 
-        @param notes. A list of Document objects (containing text and annotations)
-        @return       None
+        @param notes.       A list of Document objects (containing text and annotations)
+        @param hyperparams. A dict of CLI-specified hyperparameters
+        @return             None
         """
         # Extract formatted data
         tokenized_sents  = flatten([d.getTokenizedSentences() for d in documents])
@@ -169,22 +173,23 @@ class GalenModel:
             self._training_files = [ d.getName() for d in documents ]
 
         # Call the internal method
-        self.fit(tokenized_sents, labels, dev_split=0.10)
+        self.fit(tokenized_sents, labels, dev_split=0.10, hyperparams=hyperparams)
 
 
-    def fit(self, tok_sents, tags, val_sents=None, val_tags=None, dev_split=None):
+    def fit(self, tok_sents, tags, val_sents=None, val_tags=None, dev_split=None, hyperparams={}):
         '''
         GalenModel::fit()
 
         Train clinical concept extraction model using annotated data.
 
-        @param tok_sents.  A list of sentences, where each sentence is tokenized
-                             into words
-        @param tags.       Parallel to `tokenized_sents`, 7-way labels for 
-                             concept spans
-        @param val_sents.  Validation data. Same format as tokenized_sents
-        @param val_tags.   Validation data. Same format as iob_nested_labels
-        @param dev_split.  A real number from 0 to 1
+        @param tok_sents.   A list of sentences, where each sentence is tokenized
+                              into words
+        @param tags.        Parallel to `tokenized_sents`, 7-way labels for 
+                              concept spans
+        @param val_sents.   Validation data. Same format as tokenized_sents
+        @param val_tags.    Validation data. Same format as iob_nested_labels
+        @param dev_split.   A real number from 0 to 1
+        @param hyperparams. A dict of CLI-specified hyperparameters
         '''
         # metadata
         self._time_train_begin = strftime("%Y-%m-%d %H:%M:%S", localtime())
@@ -192,7 +197,8 @@ class GalenModel:
         # train classifier
         V_w, V_c, clf, dev_score = generic_train('all', tok_sents, tags,
                                                  val_sents=val_sents,val_labels=val_tags,
-                                                 dev_split=dev_split)
+                                                 dev_split=dev_split,
+                                                 hyperparams=hyperparams)
         self._is_trained = True
         self._word_vocab = V_w
         self._char_vocab = V_c
@@ -242,7 +248,8 @@ class GalenModel:
 
 
 def generic_train(p_or_n, tokenized_sents, tags,
-                  val_sents=None, val_labels=None, dev_split=None):
+                  val_sents=None, val_labels=None, dev_split=None,
+                  hyperparams={}):
     '''
     generic_train()
 
@@ -256,6 +263,7 @@ def generic_train(p_or_n, tokenized_sents, tags,
     @param val_sents.          Validation data. Same format as tokenized_sents
     @param val_labels.         Validation data. Same format as iob_nested_labels
     @param dev_split.          A real number from 0 to 1
+    @param hyperparams.        A dict of CLI-specified hyperparameters
     '''
 
     global W
@@ -293,7 +301,10 @@ def generic_train(p_or_n, tokenized_sents, tags,
     word_vocab = build_vocab(    train_sents    )
     char_vocab = build_vocab(sum(train_sents,[]))
 
-    if W:
+    if os.path.exists(hyperparams['embeddings']):
+        # load the word vectors based on input arguments
+        W = load_embeddings(hyperparams['embeddings'])
+
         #W = { k:v[:4] for k,v in W.items() }
         dim = len(W.values()[0])
         W_init = np.random.rand(len(word_vocab),dim)
@@ -363,7 +374,8 @@ def generic_train(p_or_n, tokenized_sents, tags,
                                        val_X_char_ids = val_X_char_ids,
                                        val_Y_ids      = val_Y_labels,
                                      tag2id           = tag2id, 
-                                     W                = W_init)
+                                     W                = W_init,
+                                     hyperparams      = hyperparams)
 
     return word_vocab, char_vocab, clf, dev_score
 

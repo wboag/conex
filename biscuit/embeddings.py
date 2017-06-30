@@ -64,19 +64,28 @@ def load_glove_txt(fname, verbose=1, dev=False):
        return word_vecs
 
 
-# load vectors!
-#vectors_file = '/scratch/wboag/models/mimic-vectors.bin'
-#W = load_word2vec_binary(vectors_file, verbose=0, dev=False)
-#W = None
 
-
-# load vectors!
-homedir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-vectors_file = os.path.join(homedir, 'models', 'glove.6B.100d.txt')
-W = load_glove_txt(vectors_file, verbose=1, dev=False)
+def load_embeddings(vec_file, verbose=1, dev=True):
+    if 'glove' in vec_file:
+        return load_glove_txt(vec_file, verbose=verbose, dev=dev)
+    else:
+        print '\n\tError: unrecognized vectors. please add reader to embeddings.py\n'
+        exit(3)
 
 
 if __name__ == '__main__':
+    # load vectors!
+    #vectors_file = '/scratch/wboag/models/mimic-vectors.bin'
+    #W = load_word2vec_binary(vectors_file, verbose=0, dev=False)
+    #W = None
+
+    # load vectors!
+    homedir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    vectors_file = os.path.join(homedir, 'models', 'glove.6B.100d.txt')
+    #W = load_glove_txt(vectors_file, verbose=1, dev=False)
+    #W = load_glove_txt(vectors_file, verbose=1, dev=True)
+    #W = None
+
     print
     for w,v in sorted(W.items()):
         print w

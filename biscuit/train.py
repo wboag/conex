@@ -38,22 +38,44 @@ def main():
         dest = "model",
         help = "Path to the model that should be stored",
     )
+    parser.add_argument("--format",
+        dest = "format",
+        help = "Data format ( i2b2 )"
+    )
     parser.add_argument("--log",
         dest = "log",
         help = "Path to the log file for training info",
         default = os.path.join(CLINER_DIR, 'models', 'train.log')
     )
-    '''
-    parser.add_argument("--opt",
-        dest = "opt",
-        help = "What sequence to optimize",
-    )
-    '''
-    parser.add_argument("--format",
-        dest = "format",
-        help = "Data format ( i2b2 )"
-    )
 
+    parser.add_argument("--no-use-crf",
+        dest = "no_use_crf",
+        action = 'store_true',
+        help = "Disable CRF layer on top",
+        default = False
+    )
+    parser.add_argument("--no-use-lstm",
+        dest = "no_use_lstm",
+        action = 'store_true',
+        help = "Disable word lstm",
+        default = False
+    )
+    parser.add_argument("--no-use-char-lstm",
+        dest = "no_use_char_lstm",
+        action = 'store_true',
+        help = "Disable char lstm",
+        default = False
+    )
+    parser.add_argument("--embeddings",
+        dest = "embeddings",
+        help = "Path to read word embeddings from",
+        default = os.path.join(CLINER_DIR, 'models', 'glove.6B.100d.txt')
+    )
+    parser.add_argument("--dropout",
+        dest = "dropout",
+        help = "Dropout probability p",
+        default = 0.5
+    )
     # Parse the command line arguments
     args = parser.parse_args()
 
@@ -78,15 +100,11 @@ def main():
         exit(1)
     modeldir = os.path.dirname(args.model)
     if (not os.path.exists(modeldir)) and (modeldir != ''):
-        print >>sys.stderr, '\n\tError: Galen dir does not exist: %s' % modeldir
+        print >>sys.stderr, '\n\tError: dir does not exist: %s' % modeldir
         print >>sys.stderr,  ''
         parser.print_help(sys.stderr)
         print >>sys.stderr,  ''
         exit(1)
-
-    # A list of text and concept file paths
-    txt_files = glob.glob(args.txt)
-    con_files = glob.glob(args.con)
 
     # data format
     if not args.format:
@@ -100,6 +118,18 @@ def main():
         print >>sys.stderr, ''
         exit(1)
 
+    # collect all hyperparameter arguments
+    hyperparams = {}
+    hyperparams['use_crf']       = not args.no_use_crf
+    hyperparams['use_lstm']      = not args.no_use_lstm
+    hyperparams['use_char_lstm'] = not args.no_use_char_lstm
+    hyperparams['embeddings']    = args.embeddings
+    hyperparams['dropout']       = float(args.dropout)
+
+    # A list of text and concept file paths
+    txt_files = glob.glob(args.txt)
+    con_files = glob.glob(args.con)
+
     # Collect training data file paths
     txt_files_map = tools.map_files(txt_files)
     con_files_map = tools.map_files(con_files)
@@ -112,13 +142,12 @@ def main():
     #opt = args.opt.split('_')
 
     # Train the model
-    #train(training_list, args.model, args.format, logfile=args.log, opt=opt)
-    train(training_list, args.model, args.format, logfile=args.log)
+    train(training_list, args.model,args.format,logfile=args.log,hyperparams=hyperparams)
 
 
 
 #def train(training_list, model_path, format, logfile=None, opt=["concept"]):
-def train(training_list, model_path, format, logfile=None):
+def train(training_list, model_path, format, logfile=None, hyperparams={}):
     # Read the data into a Document object
     docs = []
     for txt, con in training_list:
@@ -138,7 +167,7 @@ def train(training_list, model_path, format, logfile=None):
 
     # Train the model using the Document's data
     #model.fit_from_documents(docs, opt)
-    model.fit_from_documents(docs)
+    model.fit_from_documents(docs, hyperparams=hyperparams)
 
     # Pickle dump
     print '\nserializing model to %s\n' % model_path

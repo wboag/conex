@@ -27,7 +27,7 @@ hierarchical_lstm = None
 
 def train(train_X_word_ids   , train_X_char_ids   , train_Y_ids   , tag2id,
             val_X_word_ids=[],   val_X_char_ids=[],   val_Y_ids=[], W=None, 
-            epochs=10        , hyperparams={}):
+            epochs=100       , hyperparams={}):
 
     word_input_dim =         matrix_max(train_X_word_ids)  + 1
     char_input_dim = max(map(matrix_max,train_X_char_ids)) + 1
@@ -61,19 +61,24 @@ def train(train_X_word_ids   , train_X_char_ids   , train_Y_ids   , tag2id,
                                        word_maxlen, char_maxlen)
     train_X_word = build_X_word_matrix(train_X_word_ids, nb_train_samples, word_maxlen)
 
-    #train_Y = create_data_matrix_Y(train_Y_seq_onehots, nb_train_samples, 
-    #                              word_maxlen, num_tags)
-    train_Y = create_id_matrix_Y(train_Y_seq_onehots, nb_train_samples, 
-                                  word_maxlen, num_tags)
+    # sparse representation depending on use of CRF
+    if hyperparams['use_crf']:
+        train_Y = create_id_matrix_Y(train_Y_seq_onehots, nb_train_samples, 
+                                      word_maxlen, num_tags)
+    else:
+        train_Y = create_data_matrix_Y(train_Y_seq_onehots, nb_train_samples, 
+                                      word_maxlen, num_tags)
 
     val_X_char = build_X_char_matrix(val_X_char_ids, nb_val_samples, 
                                        word_maxlen, char_maxlen)
     val_X_word = build_X_word_matrix(val_X_word_ids, nb_val_samples, word_maxlen)
 
-    #val_Y = create_data_matrix_Y(val_Y_seq_onehots, nb_val_samples, 
-    #                              word_maxlen, num_tags)
-    val_Y = create_id_matrix_Y(val_Y_seq_onehots, nb_val_samples, 
-                                  word_maxlen, num_tags)
+    if hyperparams['use_crf']:
+        val_Y = create_id_matrix_Y(val_Y_seq_onehots, nb_val_samples, 
+                                      word_maxlen, num_tags)
+    else:
+        val_Y = create_data_matrix_Y(val_Y_seq_onehots, nb_val_samples, 
+                                      word_maxlen, num_tags)
 
     print 
     print 'V_c:  ', char_input_dim
@@ -120,6 +125,7 @@ def train(train_X_word_ids   , train_X_char_ids   , train_Y_ids   , tag2id,
     # information about fitting the model
     scores = {}
     scores['history'] = history.history
+    scores['hyperparams'] = hyperparams
 
     # summary model (includes all size hyperparameters)
     sstream = StringIO.StringIO()
@@ -246,7 +252,7 @@ def create_model(word_input_dim, char_input_dim,
     wlstm1_size    = 100
 
     # dropout
-    p = 0.5
+    p = hyperparams['dropout']
 
     # pretrained word embeddings
     if W is not None:
@@ -262,29 +268,6 @@ def create_model(word_input_dim, char_input_dim,
 
     num_tags_inner = num_tags
 
-    # character-level LSTM encoder
-    char_input = Input(shape=(char_maxlen,), dtype='int32')
-    char_emb = Embedding(output_dim=char_emb_size,
-                         input_dim=char_input_dim,
-                         input_length=char_maxlen,
-                         mask_zero=True)(char_input)
-    char_lstm_f  = LSTM(units=c_seq_emb_size                  ,
-                        dropout=p, recurrent_dropout=p)(char_emb)
-    char_lstm_r  = LSTM(units=c_seq_emb_size,go_backwards=True,
-                        dropout=p, recurrent_dropout=p)(char_emb)
-    char_lstm    = Concatenate()([char_lstm_f,char_lstm_r])
-
-    # TODO: verify that go_backwards does the right thing (using toy example)
-    #       MAY need to reverse the sequence in keras code
-    pass
-
-    char_encoder = Model(inputs=char_input, outputs=char_lstm)
-
-    # apply char-level encoder to every char sequence (word)
-    char_seqs = Input(shape=(word_maxlen,char_maxlen),dtype='int32',name='char')
-    encoded_char_states = TimeDistributed(char_encoder)(char_seqs)
-    m_encoded_char_states = Masking(0.0)(encoded_char_states)
-
     # apply embeddings layer to every word
     word_seqs = Input(shape=(word_maxlen,), dtype='int32', name='word')
     word_embedding = Embedding(output_dim=word_emb_size,
@@ -293,44 +276,78 @@ def create_model(word_input_dim, char_input_dim,
                                weights=W_init,
                                mask_zero=True)(word_seqs)
 
-    # combine char-level encoded states WITH word embeddings
-    word_feats = Concatenate(axis=-1)([m_encoded_char_states, word_embedding])
-    #word_feats = encoded_char_fr_states
-    #word_feats = word_embedding
+    # character-level LSTM encoder
+    if hyperparams['use_char_lstm']:
+        char_input = Input(shape=(char_maxlen,), dtype='int32')
+        char_emb = Embedding(output_dim=char_emb_size,
+                             input_dim=char_input_dim,
+                             input_length=char_maxlen,
+                             mask_zero=True)(char_input)
+        char_lstm_f  = LSTM(units=c_seq_emb_size                  ,
+                            dropout=p, recurrent_dropout=p)(char_emb)
+        char_lstm_r  = LSTM(units=c_seq_emb_size,go_backwards=True,
+                            dropout=p, recurrent_dropout=p)(char_emb)
+        char_lstm    = Concatenate()([char_lstm_f,char_lstm_r])
+
+        # TODO: verify that go_backwards does the right thing (using toy example)
+        #       MAY need to reverse the sequence in keras code
+        pass
+
+        char_encoder = Model(inputs=char_input, outputs=char_lstm)
+
+        # apply char-level encoder to every char sequence (word)
+        char_seqs = Input(shape=(word_maxlen,char_maxlen),dtype='int32',name='char')
+        encoded_char_states = TimeDistributed(char_encoder)(char_seqs)
+        m_encoded_char_states = Masking(0.0)(encoded_char_states)
+
+        # combine char-level encoded states WITH word embeddings
+        word_feats = Concatenate(axis=-1)([m_encoded_char_states, word_embedding])
+
+        # what inputs to feed in
+        inputs = [char_seqs, word_seqs]
+
+    else:
+        word_feats = word_embedding
+
+        # what inputs to feed in
+        inputs = [word_seqs]
 
     # word-level LSTM
-    '''
-    word_lstm_f1 = LSTM(units=wlstm1_size, return_sequences=True,
-                        dropout=p, recurrent_dropout=p, 
-                                         )(word_feats)
-    word_lstm_r1 = LSTM(units=wlstm1_size, return_sequences=True,
-                        dropout=p, recurrent_dropout=p, 
-                        go_backwards=True)(word_feats)
-    word_lstm = Concatenate(axis=-1)([word_lstm_f1, word_lstm_r1])
-    '''
-    word_lstm = Bidirectional( LSTM(units=wlstm1_size, return_sequences=True,
-                                   dropout=p, recurrent_dropout=p)           )(word_feats)
+    if hyperparams['use_lstm']:
+        word_lstm = Bidirectional( LSTM(units=wlstm1_size,
+                                        return_sequences=True,
+                                        dropout=p,recurrent_dropout=p) )(word_feats)
+    else:
+        word_lstm = word_feats
+
+    # Dropout to features
+    word_lstm_d = Dropout(p)(word_lstm)
 
     # Predict labels using the sequence of word encodings
     orig_pred = TimeDistributed( Dense(units=num_tags_inner,
-                                       activation='softmax' )  )(word_lstm)
-    #orig_pred = TimeDistributed(Dense(units=num_tags_inner))(word_lstm)
+                                       activation='softmax' )  )(word_lstm_d)
 
-    # TODO: crf layer
-    crf = ChainCRF()
-    #crf_output = crf(word_embedding)
-    crf_output = crf(orig_pred)
-    #crf_output = orig_pred
+    # CRF layer
+    if hyperparams['use_crf']:
+        crf = ChainCRF()
+        final_pred = crf(orig_pred)
 
-    #model = Model( inputs=[word_seqs],
-    model = Model( inputs=[char_seqs,word_seqs],
-                   outputs=[crf_output]        )
+        # optimization loss
+        loss = crf.sparse_loss
+
+    else:
+        final_pred = orig_pred
+
+        # optimization loss
+        loss = 'categorical_crossentropy'
+
+    # Putting it all together
+    model = Model(inputs=inputs, outputs=final_pred)
                    
     print
     print 'compiling model'
     start = time.clock()
-    #model.compile(loss='categorical_crossentropy', optimizer='adam')
-    model.compile(loss=crf.sparse_loss, optimizer='adam')
+    model.compile(loss=loss, optimizer='adam')
     end = time.clock()
     print 'finished compiling: ', (end-start)
     print
@@ -389,7 +406,7 @@ def compute_stats(label, lstm_model, hyperparams, X_word, X_char, Y_ids):
     # IOB confusion matrix
     out = StringIO.StringIO()
     out.write('\n\n%s IOB\n\n' % label)
-    out.write(' '*7)
+    out.write(' '*6)
     for i in range(num_tags):
         out.write('%4d ' % i)
     out.write(' (gold)\n')
