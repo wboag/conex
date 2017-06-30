@@ -65,7 +65,7 @@ def load_glove_txt(fname, verbose=1, dev=False):
 
 
 
-def load_embeddings(vec_file, verbose=1, dev=True):
+def load_embeddings(vec_file, verbose=1, dev=False):
     if 'glove' in vec_file:
         return load_glove_txt(vec_file, verbose=verbose, dev=dev)
     else:
